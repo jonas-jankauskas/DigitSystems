@@ -6,22 +6,28 @@ class RotationDS:
 	
 	'''Constructs a digit system for a rotation matrix'''
 	
-	def __init__(self, base_matrix, rem='normal'):
+	def __init__(self, base_matrix, rem='normal', req0=False):
 	
 		'''a constructor for the digit system class
 		   arguments:
 				base_matrix - rational square matrix M that serves as a basis for the digit system
+				rem - type of remaindes for the residue set; default is 'normal', also posible 'reduced'
+				req0 - is 0-vector required to be included into the digit set; default is False
 		   returns:
 				initialized instance of a digit system (M, D), in which every integer vector has a finite radix expansion
 		'''
 		self.rems = rem
+		self.need0 = req0
 		
 		'''Base matrix and it's dimensions'''
 		self.base = (Matrix(base_matrix)).change_ring(QQ)
+		#to do: add check .base_ring == QQ
 	
 		self.dimr = self.base.nrows()
 		self.dimc = self.base.ncols()
 		self.dim  = min(self.dimr, self.dimc)
+
+		#to do: add check dimr == dimc
 
 		self.zero = vector(ZZ, [0]*self.dim)
 		
@@ -236,11 +242,18 @@ class RotationDS:
 		cdig = self.ndig(x)                                        #current digit
 		qvec = self.cden*(self.adjA*(x-cdig))                       #we want integer vector remain integer
 		return (vector(ZZ, [v // self.detA for v in qvec]), cdig)
-		
+
+	def digfun(self, x):
+		''' Modified digit function: if x in not in attractor, finds nearest digit with same residue mod L, otherwise returns x'''
+		if x in self.alldigs:
+			return x
+		else:
+			return self.ndig(x)
+		    
 	def Phi(self, x):
 		'''If x is not in attractor, calculates F(x)=M^{-1}(x-digit(x)). Otherwise returns x.'''
-		if x in self.attractor:
-			return (x, self.zero)
+		if x in self.alldigs:
+			return (self.zero, x)
 		else:
 			return self.F(x)
 		
@@ -252,6 +265,41 @@ class RotationDS:
 			orb.append(y)
 			y = (self.F(y))[0]
 		return (orb, y)
+
+	def expand(self, x):
+		'''Returns list of digits in a digital expansion of a vector in the lattice L'''
+		qvec = x
+		cdig = None
+		diglist = []
+		qvclist = []
+		cont = True
+		while cont:
+			qvec, cdig = self.Phi(qvec)
+			cont = qvec not in qvclist
+			qvclist.append(qvec)
+			diglist.append(cdig)
+			cont = cont and (qvec != self.zero)
+		return qvclist, diglist
+
+	def digexp(self, x):
+		'''Returns list of digit numbers in a digital expansion of a vector in the lattice L'''
+		diglist = self.expand(x)[1]
+		return [self.alldigs.index(cdig) for cdig in diglist]
+
+	def assemble(self, diglist):
+		s = vector(QQ, self.zero)
+		#print('s=' +str(s))
+		for dg in reversed(diglist):
+			s = self.base*s + dg
+			#print('digit=' + str(dg) + ', s=' +str(s))
+		return s
+
+	def digassm(self, idxlist):
+		s = vector(QQ, self.zero)
+		for idx in reversed(idxlist):
+			s = self.base*s + self.alldigs[idx]
+		return s
+	      
 
 	def _init_attractor_(self):
 		'''Builds attractor set of the DS'''
@@ -276,9 +324,11 @@ class RotationDS:
 		
 		#identify all possible distinct digits
 		self.alldigs = []
-		self.alldigs += self.tidy_attractor
 		for h in self.res.keys():
 			self.alldigs += self.dig[h]
+		self.alldigs += self.tidy_attractor
+		if self.need0:
+		    self.alldigs.append(self.zero)
 		self.alldigs = self.unique(self.alldigs)
 
 	def _build_digits_(self):
@@ -317,8 +367,11 @@ class TwistedDS:
 		self.baseMadj = self.baseM.adjugate()
 		self.baseMinv = self.baseM.inverse() 
 
-		self.rdsA = RotationDS(self.baseA, 'normal')
-		self.rdsB = RotationDS(self.baseB, 'normal')
+		self.rdsA = RotationDS(self.baseA, rem='normal', req0=True)
+		self.rdsB = RotationDS(self.baseB, rem='normal', req0=True)
+		
+		self.zero = self.blocksum(self.rdsA.zero, self.rdsB.zero)
+		self._build_digits_()
 
 
 	def project(self, vec):
@@ -329,7 +382,7 @@ class TwistedDS:
 
 	def digB(self, z):
 		x, y = self.project(z)
-		return self.rdsB.ndig(y-self.baseC*(self.rdsA.Phi(x)[0]))
+		return self.rdsB.digfun(y-self.baseC*(self.rdsA.Phi(x)[0]))
 
 	def PhiB(self, z):
 		x, y = self.project(z)
@@ -337,7 +390,56 @@ class TwistedDS:
 		
 
 	def digM(self, z):
-		return self.blocksum(self.rdsA.ndig(self.project(z)[0]), self.digB(z))
+		return self.blocksum(self.rdsA.digfun(self.project(z)[0]), self.digB(z))
 
 	def PhiM(self, z):
 		return (self.blocksum(self.rdsA.Phi(self.project(z)[0])[0], self.PhiB(z)[0]), self.digM(z))
+
+	def _build_digits_(self):
+	    self.alldigs = [self.blocksum(dig1, dig2) for dig1 in self.rdsA.alldigs for dig2 in self.rdsB.alldigs]
+
+#------ Provides orbit finding and digit expansion capabilities for Twisted Digit Functions class ------
+
+	def orbit(self, x, bound):
+		'''Builds an orbit of x under the mapping x->F(x)'''
+		orb = [x]
+		y = (self.PhiM(x))[0]
+		while (y not in orb) and (len(orb) < bound):
+			orb.append(y)
+			y = (self.PhiM(y))[0]
+		return (orb, y)
+
+	def expand(self, x):
+		'''Returns list of digits in a digital expansion of a vector in the lattice L'''
+		qvec = x
+		cdig = None
+		diglist = []
+		qvclist = []
+		cont = True
+		while cont:
+			qvec, cdig = self.PhiM(qvec)
+			cont = qvec not in qvclist
+			qvclist.append(qvec)
+			diglist.append(cdig)
+			cont = cont and (qvec != self.zero)
+		return qvclist, diglist
+
+	def digexp(self, x):
+		'''Returns list of digit numbers in a digital expansion of a vector in the lattice L'''
+		diglist = self.expand(x)[1]
+		return [self.alldigs.index(cdig) for cdig in diglist]
+
+	def assemble(self, diglist):
+		s = vector(QQ, self.zero)
+		#print('s=' +str(s))
+		for dg in reversed(diglist):
+			s = self.baseM*s + dg
+			#print('digit=' + str(dg) + ', s=' +str(s))
+		return s
+
+	def digassm(self, idxlist):
+		s = vector(QQ, self.zero)
+		for idx in reversed(idxlist):
+			s = self.baseM*s + self.alldigs[idx]
+		return s
+

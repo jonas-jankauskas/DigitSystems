@@ -1,11 +1,11 @@
 reset()
 
-attach('lattice.sage')
+attach('digsys.sage')
 
 M = matrix(QQ, 2, 2, [[0, -1],[1, -1/2]])
 N = matrix(ZZ, 2, 2, [[0, 1],[0, 0]])	
 
-print(M)
+#print(M)
 
 rds = RotationDS(M, 'normal')
 tds = TwistedDS(M, M, N)
