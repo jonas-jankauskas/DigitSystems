@@ -1,6 +1,16 @@
+"""digsys.sage: SAGE code for the classes of rotational digit system and twists of two rotational digit systems, designed for examples  in Section 7.1 and 7.2 of the paper Rational matrix digit systems by J. Jankauskas and J. M. Thuswaldner """
+
+__author__ = "Jonas Jankauskas"
+__copyright__ = "Copyright 2021, Jonas Jankauskas"
+__license__ = "LGPLv3"
+__version__ = "1.0"
+__maintainer__ = "Jonas Jankauskas"
+__email__ = "jonas.jankauskas@gmail.com"
+__status__ = "Production"
+
 import numpy as np
 
-testBound = 1000
+testBound = 10000
 
 class RotationDS:
 	
@@ -30,6 +40,8 @@ class RotationDS:
 		#to do: add check dimr == dimc
 
 		self.zero = vector(ZZ, [0]*self.dim)
+
+        #to do: add test M abs(eigenvalues) = 1
 		
 		'''Prepare transform matrices T and Q for rotation form'''
 		self._init_transforms_()
@@ -44,22 +56,19 @@ class RotationDS:
 		
 		self.S, self.U, self.V = self.A.smith_form()
 		
-		self.inv_U = det(self.U) * (self.U).adjugate()
-		self.inv_V = det(self.V) * (self.V).adjugate(
-
-		)
+		self.inv_U = det(self.U) * ((self.U).adjugate())
+		self.inv_V = det(self.V) * ((self.V).adjugate())
 		
 		'''Smith invariants and basis matrix L for auxiliary lattice'''
 		self.divs = [s//gcd(self.cden, s) for s in self.S.diagonal()]
-		self.L = self.inv_U * diagonal_matrix(ZZ, self.divs) * (self.inv_V)
-		self.invL = self.L.inverse()
-		
+		self.L = self.inv_U * diagonal_matrix(ZZ, self.divs)
+		self.invL = (self.L).inverse()
+
 		'''Hash vectors and residue vectors mod L'''
 		self._inithash_()
 		self.hvecs = [vector(ZZ, tuple) for tuple in np.ndindex(*self.divs)]
 		self.res = {self.vhash(vec): self.inv_U*self.redvec(vec) for vec in self.hvecs}
-		
-		
+
 		#standard hulls for residue vectors
 		self.hull = {h: self.enclose(self.L, self.res[h]) for h in self.res.keys()}
 		
@@ -131,7 +140,7 @@ class RotationDS:
 		
 		return(norm(self.Tinv*vec))
 		
-	def redrem(a, b):
+	def redrem(self, a, b):
 		r = a % b
 		if (2*r > b):
 			r -= b
@@ -207,9 +216,12 @@ class RotationDS:
 	def get_polyhedron(self, M, b):
 	
 		'''solves linear programming problem M*x<=b in R^d'''
+
+		#from sage.numerical.backends.generic_backend import get_solver
+		#slv = get_solver("PPL")
 		
 		lp = MixedIntegerLinearProgram(solver="PPL")
-		x = lp.new_variable(integer=True); x
+		x = lp.new_variable(integer=True); #x
 		lp.add_constraint(M*x <= b)
 		lp.set_objective(None)
 		return lp.polyhedron()
@@ -219,8 +231,26 @@ class RotationDS:
 		'''Calculates the feasible region of M*x<=b in R^d and all lattice points x = r (mod L)  in that region'''
 		
 		M, b = self.get_matrixform(V)
+
+		#debug
+		print('r=', r)
+		print('\nM=', M, '\nb=', b)
+		print('base ring of M is of the type', M.base_ring())
+		print('base ring of b is of the type', b.base_ring())
+		
 		feas = self.get_polyhedron(M, b) 										  #feasible region F
-		sols = [L*x+r for x in self.get_polyhedron(M*L, b-M*r).integral_points()]  #lattice points r (mod L) inside F
+		pts = feas.integral_points()
+		sols = [x for x in pts if self.resvec(x) == r]
+		#deprecated old code
+		#print('Starting solution of feasible points....')
+		#print('A=', self.A, '\n Q=', self.Q, '\n L=', self.L, '\n M=', M, '\n b=', b, '\n residues r=', self.res)
+		#print('Feasible region:', feas)
+		#pl = self.get_polyhedron(M*L, b-M*r);
+		#print('Feasible region for lattice points:', pl)
+		#print('Extracting lattice points...')
+		#sols = [L*x+r for x in pl.integral_points()]  #lattice points r (mod L) inside F
+		#debug ----
+		#print('Ending solution of feasible points....')
 		return 	(feas, sols)
 	
 	def nearest(self, x, V):
@@ -302,17 +332,23 @@ class RotationDS:
 	      
 
 	def _init_attractor_(self):
+
 		'''Builds attractor set of the DS'''
 		self.attractor = []
 		self.attr_orbit = {}
 		checked = []
 		for x in self.allreps:
+			#debug
+			print('\nTesting repeller point x=', x)
 			if x not in checked:
 				xorbit, last = self.orbit(x, testBound)
 				self.attractor += [last]
 				self.attr_orbit[tuple(last)] = xorbit[xorbit.index(last):]
 				checked += xorbit
 		self.attractor = self.unique(self.attractor)
+
+		#debug
+		print('\nRepresentatives of repeller orbits:', self.attractor)
 
 		#removes attractor points whose orbit caintains the digit
 		self.tidy_attractor = []
@@ -333,26 +369,43 @@ class RotationDS:
 
 	def _build_digits_(self):
 		'''Builds digit set'''
+
+		#debug reports
+		print('\nAux. lattice L=\n', self.L)
+		print('\n Residue group R=\n', self.res)
+		print('\n Convex Hulls =\n', self.hull)
+
 		self.dig = {}
 		self.reps = {} #repeller points
 		self.regs = {} #repelling regions
 		self.allreps = []
 		for h in self.res.keys():
+			#debug
+			print('\nFinding repeller points for residue r=', self.res[h])
 			self.dig[h] = [self.res[h] - vec for vec in self.hull[h]]
 			self.regs[h], self.reps[h] = self.get_solutions(self.dig[h], self.L, self.res[h])  
 			self.allreps += self.reps[h]
-		
+			#debug
+			print('\nFound repeller points:', self.reps[h])
+		print('\nInitializing attractor set...\n')
 		self._init_attractor_()
+
+		#debug reports
+		print('\nPre-periodic digits preD=\n', self.dig)
+		print('\nAttractor set Attr=\n', self.tidy_attractor)
+		print('\nFinal digits D=\n', self.alldigs)
 
 class TwistedDS:
 
-	def __init__(self, A, B, C):
+	def __init__(self, rotdsA, rotdsB, C):
 
-		self.baseA = matrix(A)
+		self.rdsA = rotdsA #perhaps deepcopy?
+		self.baseA = self.rdsA.base
 		self.baseA.inverse()
 		self.dimA = self.baseA.ncols()
-		
-		self.baseB = matrix(B)
+
+		self.rdsB = rotdsB
+		self.baseB = self.rdsB.base
 		self.baseBinv = self.baseB.inverse()
 		self.dimB = self.baseB.ncols()
 		
@@ -360,15 +413,12 @@ class TwistedDS:
 
 		self.baseO = zero_matrix(ZZ, self.baseA.nrows(), self.baseB.ncols())
 
-		#self.baseN = zero_matrix(ZZ, self.baseB.nrows, self.baseA.ncols)
-		#self.baseN[0][-1]=1
-
 		self.baseM = block_matrix([[self.baseA, self.baseO], [self.baseC, self.baseB]])
 		self.baseMadj = self.baseM.adjugate()
 		self.baseMinv = self.baseM.inverse() 
 
-		self.rdsA = RotationDS(self.baseA, rem='normal', req0=True)
-		self.rdsB = RotationDS(self.baseB, rem='normal', req0=True)
+		#self.rdsA = RotationDS(self.baseA, rem='normal', req0=True)
+		#self.rdsB = RotationDS(self.baseB, rem='normal', req0=True)
 		
 		self.zero = self.blocksum(self.rdsA.zero, self.rdsB.zero)
 		self._build_digits_()
@@ -430,6 +480,7 @@ class TwistedDS:
 		return [self.alldigs.index(cdig) for cdig in diglist]
 
 	def assemble(self, diglist):
+		'''Assembles a vector from the given list of its digits'''
 		s = vector(QQ, self.zero)
 		#print('s=' +str(s))
 		for dg in reversed(diglist):
@@ -438,6 +489,7 @@ class TwistedDS:
 		return s
 
 	def digassm(self, idxlist):
+		'''Assembles a vector from the list of indices of its digits'''
 		s = vector(QQ, self.zero)
 		for idx in reversed(idxlist):
 			s = self.baseM*s + self.alldigs[idx]
